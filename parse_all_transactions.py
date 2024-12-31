@@ -1,14 +1,15 @@
 from pathlib import Path
-from parsers.barclays_parser import BarclaysOFXParser, Statement
+from parsers.barclays_parser import BarclaysOFXParser, BarclaysStatement
 from parsers.barclaycard_parser import BarclaycardOFXParser, CreditCardStatement
 from rename_data_files import rename_data_files
 from parsers.qif_parser import QIFParser, QIFStatement
 from parsers.pdf_parser import JohnLewisPDFParser, PDFStatement
 from parsers.nationwide_parser import NationwideXMLParser, NationwideStatement
 from typing import Dict, List, Union, Any
+from parsers.virgin_parser import VirginCSVParser, VirginStatement
 
 
-def parse_all_account_folders(base_path: Path) -> Dict[str, List[Union[Statement, CreditCardStatement, QIFStatement, PDFStatement, NationwideStatement]]]:
+def parse_all_account_folders(base_path: Path) -> Dict[str, List[Union[BarclaysStatement, CreditCardStatement, QIFStatement, PDFStatement, NationwideStatement, VirginStatement]]]:
     """
     Parse all account folders and return their statements
     
@@ -30,7 +31,9 @@ def parse_all_account_folders(base_path: Path) -> Dict[str, List[Union[Statement
     
     for subfolder in subfolders:
         # Choose appropriate parser based on folder name
-        if 'barclaycard' in subfolder.lower():
+        if 'virgin' in subfolder.lower():
+            parser = VirginCSVParser(base_path=str(base_path), subfolder=subfolder)
+        elif 'barclaycard' in subfolder.lower():
             parser = BarclaycardOFXParser(base_path=str(base_path), subfolder=subfolder)
         elif 'barclays' in subfolder.lower():
             parser = BarclaysOFXParser(base_path=str(base_path), subfolder=subfolder)

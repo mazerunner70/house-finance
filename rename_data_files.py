@@ -20,7 +20,7 @@ def rename_data_files(base_path: Path) -> None:
         # Look for data files in this folder
         for file_path in folder_path.glob('data*'):
             try:
-                if file_path.suffix.lower() in ['.qif', '.pdf']:
+                if file_path.suffix.lower() in ['.qif', '.pdf', '.csv']:
                     # For QIF files, use current date/time
                     date_formatted = datetime.now().strftime('%Y-%m-%d-%H-%M-%S-%f')
                 else:

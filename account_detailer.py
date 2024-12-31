@@ -73,7 +73,7 @@ class AccountDetailer:
                     
                     # Include running_total only if it exists
                     if hasattr(trans, 'running_total'):
-                        transaction_row.append(f"£{trans.running_total:,.2f}")
+                        transaction_row.append(f"£{trans.running_total:,.2f}") 
                     else:
                         transaction_row.append("")  # Add an empty string if running_total is not present
                     

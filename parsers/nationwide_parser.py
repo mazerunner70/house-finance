@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List, Optional
 import xml.etree.ElementTree as ET
 import configparser
+import hashlib
 
 @dataclass
 class NationwideTransaction:
@@ -72,8 +73,15 @@ class NationwideXMLParser(OFXParser):
                 memo.text.strip() if memo is not None else None
             ]))
             
+            # Generate transaction ID
+            trans_id = self._generate_transaction_id(
+                self._parse_date(date_str),
+                self._parse_amount(amount_str),
+                self._clean_description(description)
+            )
+            
             return NationwideTransaction(
-                transaction_id=fitid,
+                transaction_id=trans_id,
                 date=self._parse_date(date_str),
                 amount=self._parse_amount(amount_str),
                 description=self._clean_description(description),
@@ -155,3 +163,26 @@ class NationwideXMLParser(OFXParser):
                     statements.append(statement)
         
         return sorted(statements, key=lambda x: x.start_date) 
+    
+    def _generate_transaction_id(self, date: datetime, amount: Decimal, description: str) -> str:
+        """
+        Generate a unique transaction ID based on transaction details and subfolder
+        
+        Args:
+            date: Transaction date
+            amount: Transaction amount
+            description: Transaction description
+        
+        Returns:
+            String hash uniquely identifying the transaction
+        """
+        # Create a string combining key transaction attributes
+        id_string = (
+            f"{self.subfolder}|"
+            f"{date.strftime('%Y%m%d')}|"
+            f"{abs(amount):.2f}|"
+            f"{description}"
+        )
+        
+        # Generate SHA-256 hash and take first 12 characters
+        return hashlib.sha256(id_string.encode()).hexdigest()[:12] 

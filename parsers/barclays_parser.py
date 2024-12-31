@@ -6,36 +6,61 @@ from decimal import Decimal
 from pathlib import Path
 from typing import List, Optional
 import re
+import hashlib
 import configparser
 
 @dataclass
-class Transaction:
-    """Represents a single bank transaction"""
+class BarclaysTransaction:
+    """Represents a Barclays bank transaction"""
     transaction_id: str
     date: datetime
     amount: Decimal
     description: str
     type: str
-    balance_after: Optional[Decimal] = None
-    reference: Optional[str] = None
+    running_total: Optional[Decimal] = None
 
 @dataclass
-class Statement:
-    """Represents a bank statement with transactions"""
+class BarclaysStatement:
+    """Represents a Barclays bank statement"""
     account_id: str
     start_date: datetime
     end_date: datetime
     start_balance: Decimal
     end_balance: Decimal
-    transactions: List[Transaction]
+    transactions: List[BarclaysTransaction]
 
 class BarclaysOFXParser(OFXParser):
-    """Parser for Barclays Bank OFX files"""
+    """Parser for Barclays OFX files"""
     
     def __init__(self, base_path: str = "financial-data", subfolder: str = "barclays-current"):
-        super().__init__(base_path, subfolder)
+        self.base_path = Path(base_path) / subfolder
         self.subfolder = subfolder
         self.ledger_amounts_file = Path(base_path) / 'ledger_amounts.properties'
+    
+    def _generate_transaction_id(self, date: datetime, amount: Decimal, description: str, trans_type: str) -> str:
+        """
+        Generate a unique transaction ID based on transaction details and subfolder
+        
+        Args:
+            date: Transaction date
+            amount: Transaction amount
+            description: Transaction description
+            trans_type: Transaction type (e.g. DEBIT, CREDIT)
+        
+        Returns:
+            String hash uniquely identifying the transaction
+        """
+        # Create a string combining key transaction attributes
+        id_string = (
+            f"{self.subfolder}|"
+            f"{date.strftime('%Y%m%d')}|"
+            f"{amount:.2f}|"
+            f"{description}|"
+            f"{trans_type}"
+        )
+        
+        # Generate SHA-256 hash and take first 12 characters
+        return hashlib.sha256(id_string.encode()).hexdigest()[:12]
     
     def _read_ledger_amount(self, start_date: datetime) -> Optional[Decimal]:
         """Read the ledger amount from the properties file"""
@@ -68,37 +93,49 @@ class BarclaysOFXParser(OFXParser):
         desc = re.sub(r'^(BGC|BBP|CWP|TFR|DD|SO|DEB|CRD|)\s*', '', desc)
         return desc.strip()
     
-    def _parse_transaction_block(self, trans_block: str) -> Optional[Transaction]:
-        """Parse a transaction block into a Transaction object"""
+    def _parse_transaction_block(self, trans_block: str) -> Optional[BarclaysTransaction]:
+        """Parse a transaction block into a BarclaysTransaction object"""
         try:
-            # Extract and clean all fields
-            trntype = (self._extract_tag_value(trans_block, 'TRNTYPE') or '').strip()
-            date_str = (self._extract_tag_value(trans_block, 'DTPOSTED') or '').strip()
-            amount_str = (self._extract_tag_value(trans_block, 'TRNAMT') or '').strip()
-            fitid = (self._extract_tag_value(trans_block, 'FITID') or '').strip()
-            name = (self._extract_tag_value(trans_block, 'NAME') or '').strip()
-            memo = (self._extract_tag_value(trans_block, 'MEMO') or '').strip()
+            # Extract transaction details
+            trntype = self._extract_tag_value(trans_block, 'TRNTYPE')
+            date_str = self._extract_tag_value(trans_block, 'DTPOSTED')
+            amount_str = self._extract_tag_value(trans_block, 'TRNAMT')
+            name = self._extract_tag_value(trans_block, 'NAME')
+            memo = self._extract_tag_value(trans_block, 'MEMO')
             
-            if not all([trntype, date_str, amount_str, fitid]):
+            if not all([trntype, date_str, amount_str]):
                 return None
-                
-            # Combine and clean description
+            
+            # Parse date and amount
+            date = self._parse_date(date_str)
+            amount = self._parse_amount(amount_str)
+            
+            # Clean and combine description
             description = f"{name} {memo}".strip()
             description = self._clean_description(description)
             
-            return Transaction(
-                transaction_id=fitid,
-                date=self._parse_date(date_str),
-                amount=self._parse_amount(amount_str),
+            # Generate transaction ID including type
+            trans_id = self._generate_transaction_id(
+                date,
+                amount,
+                description,
+                trntype
+            )
+            
+            return BarclaysTransaction(
+                transaction_id=trans_id,
+                date=date,
+                amount=amount,
                 description=description,
                 type=trntype
             )
+            
         except Exception as e:
             print(f"Error parsing transaction block: {str(e)}")
             return None
     
-    def _parse_ofx_file(self, file_path: Path) -> Optional[Statement]:
-        """Parse an OFX file and return a Statement object"""
+    def _parse_ofx_file(self, file_path: Path) -> Optional[BarclaysStatement]:
+        """Parse an OFX file and return a BarclaysStatement object"""
         try:
             with open(file_path, 'r', encoding='cp1252') as file:
                 content = file.read()
@@ -136,7 +173,7 @@ class BarclaysOFXParser(OFXParser):
                     transaction.running_total = running_total                
 
 
-                return Statement(
+                return BarclaysStatement(
                     account_id=acctid,
                     start_date=dtstart,
                     end_date=dtend,
@@ -150,7 +187,7 @@ class BarclaysOFXParser(OFXParser):
             print (traceback.format_exc())
             return None
     
-    def parse_all_statements(self) -> List[Statement]:
+    def parse_all_statements(self) -> List[BarclaysStatement]:
         """Parse all OFX files in the Barclays folder and remove duplicate transactions"""
         statements = []
         seen_transactions = set()  # Keep track of transaction IDs we've seen

@@ -29,7 +29,7 @@ class QIFStatement:
 class QIFParser:
     """Parser for QIF files"""
     
-    def __init__(self, base_path: str = "financial-data", subfolder: str = ""):
+    def __init__(self, base_path: str = "financial-data", subfolder: str = "mbna-credit"):
         self.base_path = Path(base_path) / subfolder
         self.subfolder = subfolder
         self.ledger_amounts_file = Path(base_path) / 'ledger_amounts.properties'
@@ -69,11 +69,27 @@ class QIFParser:
         return Decimal(amount_str.strip())
     
     def _generate_transaction_id(self, date: datetime, amount: Decimal, description: str) -> str:
-        """Generate a unique transaction ID based on transaction fields"""
-        # Create a unique string based on the transaction fields
-        unique_string = f"{date.isoformat()}|{amount}|{description}"
-        # Use a hash function to create a unique ID
-        return hashlib.md5(unique_string.encode()).hexdigest()
+        """
+        Generate a unique transaction ID based on transaction details and subfolder
+        
+        Args:
+            date: Transaction date
+            amount: Transaction amount
+            description: Transaction description
+        
+        Returns:
+            String hash uniquely identifying the transaction
+        """
+        # Create a string combining key transaction attributes
+        id_string = (
+            f"{self.subfolder}|"
+            f"{date.strftime('%Y%m%d')}|"
+            f"{abs(amount):.2f}|"
+            f"{description}"
+        )
+        
+        # Generate SHA-256 hash and take first 12 characters
+        return hashlib.sha256(id_string.encode()).hexdigest()[:12]
     
     def _parse_qif_file(self, file_path: Path) -> Optional[QIFStatement]:
         """Parse a QIF file and return a QIFStatement object"""
