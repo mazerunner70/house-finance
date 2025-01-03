@@ -17,6 +17,7 @@ class CreditCardTransaction:
     amount: Decimal
     description: str
     type: str
+    account_name: str  # Add account_name field
     reference: Optional[str] = None
     merchant_category: Optional[str] = None
     running_total: Optional[Decimal] = None
@@ -110,12 +111,13 @@ class BarclaycardOFXParser(OFXParser):
             )
             
             return CreditCardTransaction(
-                transaction_id=trans_id,  # Use generated ID instead of fitid
+                transaction_id=trans_id,
                 date=self._parse_date(trans_date_str if trans_date_str else date_str),
                 post_date=self._parse_date(date_str),
                 amount=self._parse_amount(amount_str),
                 description=description,
                 type=trntype,
+                account_name=self.base_path.name,  # Add account name from folder name
                 reference=ref if ref else None,
                 merchant_category=category if category else None
             )

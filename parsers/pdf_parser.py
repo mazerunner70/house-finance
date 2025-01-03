@@ -16,6 +16,7 @@ class PDFTransaction:
     amount: Decimal
     description: str
     type: str
+    account_name: str
     reference: Optional[str] = None
     running_total: Optional[Decimal] = None
 @dataclass
@@ -135,7 +136,8 @@ class JohnLewisPDFParser:
                             date=self._parse_date(date_str),
                             amount=amount,  
                             description=desc.strip(),
-                            type=trans_type
+                            type=trans_type,
+                            account_name=self.base_path.name
                         ))
 
                 except (ValueError, IndexError) as e:

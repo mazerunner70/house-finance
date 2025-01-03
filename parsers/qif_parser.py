@@ -15,6 +15,7 @@ class QIFTransaction:
     amount: Decimal
     description: str
     type: str
+    account_name: str
     reference: Optional[str] = None
     category: Optional[str] = None
     running_total: Optional[Decimal] = None
@@ -122,6 +123,7 @@ class QIFParser:
                                 amount=current_trans.get('amount', Decimal('0')),
                                 description=current_trans.get('description', ''),
                                 type=current_trans.get('type', 'OTHER'),
+                                account_name=self.base_path.name,
                                 reference=current_trans.get('reference'),
                                 category=current_trans.get('category')
                             ))
@@ -152,6 +154,7 @@ class QIFParser:
                         amount=current_trans.get('amount', Decimal('0')),
                         description=current_trans.get('description', ''),
                         type=current_trans.get('type', 'OTHER'),
+                        account_name=self.base_path.name,
                         reference=current_trans.get('reference'),
                         category=current_trans.get('category')
                     ))
@@ -186,16 +189,46 @@ class QIFParser:
             return None
     
     def parse_all_statements(self) -> List[QIFStatement]:
-        """Parse all QIF files in the folder"""
+        """Parse all QIF files in the folder and remove duplicate transactions"""
         statements = []
+        seen_transactions = set()  # Keep track of transaction IDs we've seen
         
         if not self.base_path.exists():
             print(f"Folder not found at {self.base_path}")
             return statements
         
-        for file_path in self.base_path.glob("*.qif"):
+        # First collect all files and sort by name to ensure consistent processing order
+        qif_files = sorted(self.base_path.glob("*.qif"))
+      
+        # Process each file
+        for file_path in qif_files:
             statement = self._parse_qif_file(file_path)
-            if statement:
-                statements.append(statement)
+            if statement and statement.transactions:
+                # Filter out duplicates while preserving order
+                unique_transactions = []  
+                for trans in statement.transactions:
+                    if trans.transaction_id not in seen_transactions:
+                        seen_transactions.add(trans.transaction_id)
+                        unique_transactions.append(trans)
+                
+                # Only create statement if we have unique transactions
+                if unique_transactions:
+                    # Sort transactions by date
+                    unique_transactions.sort(key=lambda x: x.date)
+                    
+                    # Calculate running totals
+                    ledger_bal = self._read_ledger_amount(unique_transactions[0].date)
+                    if ledger_bal is not None:
+                        running_total = ledger_bal
+                        for t in unique_transactions:
+                            running_total += t.amount
+                            t.running_total = running_total
+                        
+                        statements.append(QIFStatement(
+                            account_name=self.base_path.name,
+                            transactions=unique_transactions,
+                            start_date=unique_transactions[0].date,
+                            end_date=unique_transactions[-1].date
+                        ))
         
-        return sorted(statements, key=lambda x: x.transactions[0].date if x.transactions else None) 
+        return sorted(statements, key=lambda x: x.start_date) 

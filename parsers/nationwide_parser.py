@@ -16,6 +16,7 @@ class NationwideTransaction:
     amount: Decimal
     description: str
     type: str
+    account_name: str
     balance_after: Optional[Decimal] = None
     reference: Optional[str] = None
     running_total: Optional[Decimal] = None
@@ -85,7 +86,8 @@ class NationwideXMLParser(OFXParser):
                 date=self._parse_date(date_str),
                 amount=self._parse_amount(amount_str),
                 description=self._clean_description(description),
-                type=trntype
+                type=trntype,
+                account_name=self.base_path.name
             )
         except Exception as e:
             print(f"Error parsing transaction element: {str(e)}")

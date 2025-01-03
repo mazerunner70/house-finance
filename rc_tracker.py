@@ -34,10 +34,11 @@ class RC_Tracker:
             rc_patterns = {}
 
         # Get all transactions sorted by date
-        all_transactions = sorted(
+        self.all_transactions = sorted(
             self._combine_transactions(statements_by_folder),
             key=lambda x: x.date
         )
+        
         
         recurring_charges = {}
         
@@ -50,27 +51,26 @@ class RC_Tracker:
             status_change_date = config.get('status_change_date', None)
             
             # Find matching transactions
-            matching_trans = []
+            new_matching_trans = []
             known_transactions = []
             new_transactions = []
             new_transaction_ids = []
             
-            # Only look for new transactions if status is 'running'
-            is_active = status == 'running'
-            
-            for trans in all_transactions:
-                if re.search(pattern, trans.description, re.IGNORECASE) and trans.transaction_id not in known_ids:
-                    matching_trans.append(trans)
+            # for this charge, find all known transactions and all new transactions
+            for trans in self.all_transactions:
                 if trans.transaction_id in known_ids:
                     known_transactions.append(trans)
-            
+                elif re.search(pattern, trans.description, re.IGNORECASE):
+                    new_matching_trans.append(trans)
+
+            sanitised_transactions = self.sanitise(known_transactions)
             # Look for similar descriptions with similar intervals
-            avg_amount = sum(t.amount for t in known_transactions) / len(known_transactions) if known_transactions else None                   
+            avg_amount = sum(t.amount for t in sanitised_transactions) / len(sanitised_transactions) if sanitised_transactions else None                   
             # Check for similar amount and description
-            for trans in matching_trans:
+            for trans in new_matching_trans:
                 good_amount_diff = (abs(trans.amount - avg_amount) / abs(avg_amount) < 0.2) if known_transactions and avg_amount!= 0 else True
-                good_interval = self._fits_interval_pattern(trans.date, known_transactions, interval)
-                if good_amount_diff and good_interval:
+                good_interval = self._fits_interval_pattern(trans.date, sanitised_transactions, interval)
+                if interval == 'irregular' or (good_amount_diff and good_interval):
                     new_transactions.append(trans)
                     new_transaction_ids.append(trans.transaction_id)
             full_transactions = known_transactions + new_transactions
@@ -331,6 +331,208 @@ class RC_Tracker:
         
         print(f"Report written to {output_file}")
 
+    def generate_budget_report(self, recurring_charges: Dict[str, Dict[str, Any]], output_dir: Path = Path("output/reports")) -> None:
+        """Generate budget report showing last 3 months, current month spend and targets"""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_dir / "budget_report.txt"
+        
+        # Load budget targets
+        budget_file = Path("config/budget_targets.json")
+        if budget_file.exists():
+            with open(budget_file, 'r') as f:
+                budget_targets = json.load(f)
+        else:
+            budget_targets = {}
+        
+        # Get current month and previous 3 complete months
+        today = datetime.now()
+        current_month_date = today.replace(day=1)
+        current_month_key = current_month_date.strftime('%Y-%m')
+        
+        # Get the 3 complete months + the current month
+        recent_months = []
+        first_prev_month = current_month_date
+        for _ in range(4):
+            recent_months.append(first_prev_month)
+            # Move to first day of previous month
+            first_prev_month = (first_prev_month - timedelta(days=1)).replace(day=1)
+        
+        recent_months.reverse()  # Oldest first
+
+        # get recent months keys
+        recent_months_keys = [month.strftime('%Y-%m') for month in recent_months]
+        
+        # Calculate monthly totals for each charge
+        budget_data = []
+        targets_updated = False
+        
+        for name, data in recurring_charges.items():
+            all_transactions = data['known_transactions'] + data['new_transactions']
+            
+            # Initialise monthly totals with the previous months as keys and empty lists as values
+            monthly_totals = {key: [] for key in recent_months_keys}
+            
+            # Populate monthly totals with all transactions
+            for trans in all_transactions:
+                trans_month_key = trans.date.strftime('%Y-%m')
+                # Store tuple of (amount, date) to track transaction order
+                if trans_month_key in monthly_totals:
+                    monthly_totals[trans_month_key].append((abs(trans.amount), trans.date))
+            
+            # Handle monthly interval charges with multiple entries in a month
+            if data['interval'].lower() == 'monthly':
+                # if there are zero amounts in a month, move the first amount from the next month to the current month
+                for i in range(len(recent_months_keys)):
+                    if not monthly_totals[recent_months_keys[i]] and i < len(recent_months_keys) - 1 and len(monthly_totals[recent_months_keys[i + 1]]) > 0:
+                        next_month_key = recent_months_keys[i + 1]
+                        monthly_totals[recent_months_keys[i]].append(monthly_totals[next_month_key][0])
+                        monthly_totals[next_month_key] = monthly_totals[next_month_key][1:]
+            
+            # Convert lists to totals (sum only the amounts, not the dates)
+            monthly_sums = {
+                month: sum(amount for amount, _ in amounts)
+                for month, amounts in monthly_totals.items()
+            }
+            
+            # Calculate 3-month average if no target exists
+            previous_amounts = [
+                monthly_sums.get(m.strftime('%Y-%m'), Decimal('0')) 
+                for m in recent_months[0:3]
+            ]
+            
+            if previous_amounts:
+                three_month_avg = sum(previous_amounts[0:3]) / Decimal('3')
+            else:
+                three_month_avg = Decimal('0')
+            
+            # If no target exists and we have history, create one
+            if name not in budget_targets and three_month_avg > 0:
+                budget_targets[name] = {
+                    "target": float(three_month_avg.quantize(Decimal('0.01')))
+                }
+                targets_updated = True
+            
+            # Get target and calculate percentage
+            target = Decimal(str(budget_targets.get(name, {}).get('target', '0')))
+            current_month_spend = monthly_sums.get(current_month_key, Decimal('0'))
+            percentage = (current_month_spend / target * 100) if target else 0
+            
+            budget_data.append({
+                'name': name,
+                'previous_months': previous_amounts,
+                'three_month_avg': three_month_avg,
+                'current_month': current_month_spend,
+                'target': target,
+                'percentage': percentage
+            })
+        
+        # Save updated targets if new ones were added
+        if targets_updated:
+            budget_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(budget_file, 'w') as f:
+                json.dump(budget_targets, f, indent=4)
+        
+        # Sort by percentage descending
+        budget_data.sort(key=lambda x: x['percentage'], reverse=True)
+        
+        # Write report
+        with open(output_file, 'w') as f:
+            f.write("Budget Report\n")
+            f.write("=" * 100 + "\n\n")
+            
+            # Create headers
+            headers = ['Charge']
+            headers.extend([m.strftime('%b %Y') for m in recent_months[0:3]])
+            headers.extend(['3 month avg', 'Current', 'Target', 'Progress'])
+            
+            # Create table data
+            table_data = []
+            total_previous_months = [Decimal('0')] * 3
+            total_three_month_avg = Decimal('0')
+            total_current = Decimal('0')
+            total_target = Decimal('0')
+            
+            for item in budget_data:
+                if item['target'] > 0:  # Only show items with targets
+                    row = [item['name']]
+                    row.extend([f"£{float(amt):.2f}" for amt in item['previous_months']])
+                    row.append(f"£{float(item['three_month_avg']):.2f}")
+                    row.append(f"£{float(item['current_month']):.2f}")
+                    row.append(f"£{float(item['target']):.2f}")
+                    row.append(f"{float(item['percentage']):.1f}%")
+                    table_data.append(row)
+                    
+                    # Add to totals
+                    for i, amt in enumerate(item['previous_months']):
+                        total_previous_months[i] += amt
+                    total_three_month_avg += item['three_month_avg']
+                    total_current += item['current_month']
+                    total_target += item['target']
+            
+            # Add totals row
+            total_row = ['TOTAL']
+            total_row.extend([f"£{float(amt):.2f}" for amt in total_previous_months])
+            total_row.append(f"£{float(total_three_month_avg):.2f}")
+            total_row.append(f"£{float(total_current):.2f}")
+            total_row.append(f"£{float(total_target):.2f}")
+            total_percentage = (total_current / total_target * 100) if total_target else 0
+            total_row.append(f"{float(total_percentage):.1f}%")
+            
+            # Add a separator before totals
+            table_data.append(['-' * 15] * len(headers))
+            table_data.append(total_row)
+            
+            f.write(tabulate(
+                table_data,
+                headers=headers,
+                tablefmt='grid',
+                stralign='right'
+            ))
+
+    def sanitise(self, transactions: List[Any]) -> List[Any]:
+        """
+        Remove pairs of transactions that cancel each other out
+        
+        Args:
+            transactions: List of transactions to sanitise
+            
+        Returns:
+            List of transactions with cancelling pairs removed
+        """
+        # Sort transactions by date
+        sorted_trans = sorted(transactions, key=lambda x: x.date)
+        
+        # Track which transactions to remove
+        to_remove = set()
+        
+        # Look for cancelling pairs
+        for i in range(len(sorted_trans)-1):
+            if i in to_remove:
+                continue
+            
+            current = sorted_trans[i]
+            
+            # Look ahead for cancelling transaction within 7 days
+            for j in range(i+1, len(sorted_trans)):
+                if j in to_remove:
+                    continue
+                
+                next_trans = sorted_trans[j]
+                days_between = (next_trans.date - current.date).days
+                
+                # Stop looking if more than 7 days ahead
+                if days_between > 7:
+                    break
+                
+                # Check if transactions cancel each other out
+                if abs(current.amount + next_trans.amount) < Decimal('0.01'):      
+                    to_remove.add(i)
+                    to_remove.add(j)
+                    break
+        
+        # Return transactions that weren't removed
+        return [t for i, t in enumerate(sorted_trans) if i not in to_remove]
+
 def main():
     base_path = Path("financial-data")
     if not base_path.exists():
@@ -349,6 +551,7 @@ def main():
     
     # Generate report
     tracker.generate_report(recurring_charges)
+    tracker.generate_budget_report(recurring_charges)
 
 if __name__ == "__main__":
     main() 

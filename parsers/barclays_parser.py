@@ -17,6 +17,7 @@ class BarclaysTransaction:
     amount: Decimal
     description: str
     type: str
+    account_name: str
     running_total: Optional[Decimal] = None
 
 @dataclass
@@ -127,7 +128,8 @@ class BarclaysOFXParser(OFXParser):
                 date=date,
                 amount=amount,
                 description=description,
-                type=trntype
+                type=trntype,
+                account_name=self.base_path.name
             )
             
         except Exception as e:
